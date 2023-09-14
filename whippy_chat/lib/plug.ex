@@ -4,12 +4,17 @@ defmodule WhippyChat.Plug  do
   def init(options), do: options
 
   def call(conn, _opts) do
-    IO.inspect System.get_env("WHIPPY_API_KEY")
-    IO.inspect System.get_env("OPENAI_API_KEY")
-    IO.inspect System.get_env("DATABASE_URL")
+    {:ok, payload, _conn} = Plug.Conn.read_body(conn)
+
+    message = payload
+      |> Jason.decode!()
+      |> Map.fetch!("data")
+      |> IO.inspect
+
+    Task.start(fn -> WhippyChat.Bot.classify(message) end)
 
     conn
     |> put_resp_content_type("text/plain")
-    |> send_resp(200, "Hello World!\n")
+    |> send_resp(200, "Hello from Whippy Chat!\n")
   end
 end

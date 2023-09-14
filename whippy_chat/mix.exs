@@ -5,7 +5,7 @@ defmodule WhippyChat.MixProject do
     [
       app: :whippy_chat,
       version: "0.1.0",
-      elixir: "~> 1.13",
+      elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       deps: deps()
     ]
@@ -24,7 +24,12 @@ defmodule WhippyChat.MixProject do
     [
       {:bandit, "~> 1.0-pre"},
       {:ecto_sql, "~> 3.4"},
-      {:postgrex, "~> 0.16.3"}
+      {:postgrex, "~> 0.16.3"},
+      {:httpoison, "~> 2.0"},
+      {:jason, "~> 1.4"},
+      {:bumblebee, "~> 0.4.0"},
+      {:nx, "~> 0.6.1"},
+      {:exla, "~> 0.6.1"}
     ]
   end
 end
