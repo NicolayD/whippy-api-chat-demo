@@ -1,4 +1,6 @@
 import Config
 
 config :whippy_chat, WhippyChat.Repo,
-  url: "postgres://postgres:postgres@localhost/ecto_simple"
+  url: System.get_env("DATABASE_URL"),
+  ssl: true,
+  ssl_opts: [verify: :verify_none]
