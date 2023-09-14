@@ -22,7 +22,9 @@ defmodule WhippyChat.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:bandit, "~> 1.0-pre"}
+      {:bandit, "~> 1.0-pre"},
+      {:ecto_sql, "~> 3.4"},
+      {:postgrex, "~> 0.16.3"}
     ]
   end
 end

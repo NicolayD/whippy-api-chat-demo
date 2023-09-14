@@ -7,7 +7,8 @@ defmodule WhippyChat.Application do
 
   def start(_type, _args) do
     children = [
-      {Bandit, plug: WhippyChat.Plug, port: 4001}
+      {Bandit, plug: WhippyChat.Plug, port: 4001},
+      WhippyChat.Repo
     ]
 
     opts = [strategy: :one_for_one, name: WhippyChat.Supervisor]
