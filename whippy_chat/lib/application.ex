@@ -9,7 +9,7 @@ defmodule WhippyChat.Application do
     children = [
       {Bandit, plug: WhippyChat.Plug, port: 4001},
       WhippyChat.Repo,
-      {WhippyChat.Bot, []}
+      {WhippyChat.Bot, %{}}
     ]
 
     Application.put_env(:nx, :default_backend, EXLA.Backend)
@@ -19,6 +19,32 @@ defmodule WhippyChat.Application do
 
     opts = [strategy: :one_for_one, name: WhippyChat.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+end
+
+defmodule WhippyChat.Repo do
+  use Ecto.Repo,
+    otp_app: :whippy_chat,
+    adapter: Ecto.Adapters.Postgres
+end
+
+defmodule WhippyChat.Plug  do
+  import Plug.Conn
+
+  def init(options), do: options
+
+  def call(conn, _opts) do
+    {:ok, payload, _conn} = Plug.Conn.read_body(conn)
+
+    message = payload
+      |> Jason.decode!()
+      |> Map.fetch!("data")
+
+    Task.start(fn -> WhippyChat.Bot.classify(message) end)
+
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(200, "Hello from Whippy Chat!\n")
   end
 end
 
@@ -47,14 +73,14 @@ defmodule WhippyChat.Bot do
 
   If you feel like the intent of the conversation is unrelated to a personal injury case just respond with "END"
 
-  Respond with one question at a time.
+  Start with a thoughtful message before asking questions. Respond with one question at a time.
   """
 
   use GenServer
 
   # Client
 
-  def start_link(default) when is_list(default) do
+  def start_link(default) when is_map(default) do
     GenServer.start_link(__MODULE__, default, name: __MODULE__)
   end
 
@@ -70,19 +96,26 @@ defmodule WhippyChat.Bot do
   end
 
   @impl true
-  def handle_cast({:classify, %{"body" => body, "direction" => direction, "from" => from, "to" => to}}, %{zero_shot_serving: zero_shot_serving} = state) do
-    %{predictions: [%{label: "injury", score: injury_score}, %{label: "non-injury", score: non_injury_score}]} = Nx.Serving.run(zero_shot_serving, body)
-    |> IO.inspect()
+  def handle_cast({:classify, %{"body" => body, "direction" => direction, "from" => from, "to" => to} = params}, %{"zero_shot_serving" => zero_shot_serving} = state) do
+    state = if (direction == "INBOUND" and is_map_key(state, params["conversation_id"])) or (direction == "INBOUND" and check_for_injury(zero_shot_serving, body)) do
+      ai_prompt_messages = get_conversation(params, state)
 
-    if direction == "INBOUND" and injury_score > non_injury_score and injury_score > 0.7 do
-      params = %{
+      response_body = generate_response_body(ai_prompt_messages)
+
+      message_params = %{
         from: to,
-        body: generate_response_body(body),
+        body: response_body,
         to: from
       }
 
       headers = [{"X-WHIPPY-KEY", System.get_env("WHIPPY_API_KEY")}, {"Content-Type", "application/json"}]
-      HTTPoison.post("localhost:4000/v1/messaging/sms", Jason.encode!(params), headers) |> IO.inspect
+      HTTPoison.post("localhost:4000/v1/messaging/sms", Jason.encode!(message_params), headers, [recv_timeout: 15_000])
+
+      updated_conversation = ai_prompt_messages ++ [%{role: "assistant", content: response_body}]
+
+      Map.merge(state, %{params["conversation_id"] => updated_conversation})
+    else
+      %{}
     end
 
     {:noreply, state}
@@ -103,11 +136,11 @@ defmodule WhippyChat.Bot do
 
     IO.puts "Loaded models"
 
-    {:noreply, %{zero_shot_serving: zero_shot_serving}}
+    {:noreply, %{"zero_shot_serving" => zero_shot_serving}}
   end
 
-  defp generate_response_body(input) do
-    url = "https://api.openai.com/v1/completions"
+  defp generate_response_body(input_messages) do
+    url = "https://api.openai.com/v1/chat/completions"
 
     headers = [
       {"Authorization", "Bearer #{System.get_env("OPENAI_API_KEY")}"},
@@ -116,16 +149,30 @@ defmodule WhippyChat.Bot do
 
     params = %{
       model: "gpt-3.5-turbo",
-      messages: [
-        %{role: "system", content: @prompt},
-        %{role: "user", content: input}
-      ]
+      messages: input_messages
     }
 
-    {:ok, %HTTPoison.Response{status_code: 200, body: {:ok, body}}} = HTTPoison.post(url, Jason.encode!(params), headers, [recv_timeout: 40_000]) |> IO.inspect()
+    {:ok, %HTTPoison.Response{status_code: 200, body: body}} = HTTPoison.post(url, Jason.encode!(params), headers, [recv_timeout: 40_000])
 
-    %{choices: [%{"message" => %{"content" => response_text}}], usage: _usage} = body
+    %{"choices" => [%{"message" => %{"content" => response_text}}]} = Jason.decode!(body)
 
     response_text
+  end
+
+  defp get_conversation(%{"conversation_id" => conversation_id, "body" => body}, state) when is_map_key(state, conversation_id) do
+    state[conversation_id] ++ [%{role: "user", content: body}]
+  end
+
+  defp get_conversation(%{"body" => body}, _state) do
+    [
+      %{role: "system", content: @prompt},
+      %{role: "user", content: body}
+    ]
+  end
+
+  defp check_for_injury(zero_shot_serving, body) do
+    %{predictions: [%{label: "injury", score: injury_score}, %{label: "non-injury", score: non_injury_score}]} = Nx.Serving.run(zero_shot_serving, body)
+
+    injury_score > non_injury_score and injury_score > 0.7
   end
 end
