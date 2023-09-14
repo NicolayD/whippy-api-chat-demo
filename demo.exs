@@ -1,23 +1,13 @@
-defmodule WhippyChat.Application do
-  @moduledoc """
-  Documentation for `WhippyChat`.
-  """
-
-  use Application
-
-  def start(_type, _args) do
-    children = [
-      {Bandit, plug: WhippyChat.Plug, port: 4001},
-      WhippyChat.Repo,
-      {WhippyChat.Bot, %{}}
-    ]
-
-    Application.put_env(:nx, :default_backend, EXLA.Backend)
-
-    opts = [strategy: :one_for_one, name: WhippyChat.Supervisor]
-    Supervisor.start_link(children, opts)
-  end
-end
+Mix.install([
+  {:bandit, "~> 1.0-pre"},
+  {:ecto_sql, "~> 3.4"},
+  {:postgrex, "~> 0.16.3"},
+  {:httpoison, "~> 2.0"},
+  {:jason, "~> 1.4"},
+  {:bumblebee, "~> 0.4.0"},
+  {:nx, "~> 0.6.1"},
+  {:exla, "~> 0.6.1"}
+])
 
 defmodule WhippyChat.Repo do
   use Ecto.Repo,
@@ -48,12 +38,8 @@ end
 defmodule WhippyChat.Bot do
   @prompt """
   Your are a personal injury case qualification assistant. Your jobs is to get a new lead to answer the following questions.
-
   If the user ties to stray from answering any of the questions it is your job to guide them back on track until you have all of the questions answered.
-
-  If the user answers multiple questions in one messages, you don't need to ask the question again.
-
-  Do not give any opinion on any medical or legal related matters.
+  If the user answers multiple questions in one messages, you don't need to ask the question again. Do not give any opinion on any medical or legal related matters.
 
   Questions:
 
@@ -68,14 +54,11 @@ defmodule WhippyChat.Bot do
 
   "Thank you, one of our case managers will reach out to your shortly. END"
 
-  If you feel like the intent of the conversation is unrelated to a personal injury case just respond with "END"
-
+  If you feel like the intent of the conversation is unrelated to a personal injury case just respond with "END".
   Start with a thoughtful message before asking questions. Respond with one question at a time.
   """
 
   use GenServer
-
-  # Client
 
   def start_link(default) when is_map(default) do
     GenServer.start_link(__MODULE__, default, name: __MODULE__)
@@ -84,8 +67,6 @@ defmodule WhippyChat.Bot do
   def classify(message) do
    GenServer.cast(__MODULE__, {:classify, message})
   end
-
-  # Server (callbacks)
 
   @impl true
   def init(state) do
@@ -96,14 +77,9 @@ defmodule WhippyChat.Bot do
   def handle_cast({:classify, %{"body" => body, "direction" => direction, "from" => from, "to" => to} = params}, %{"zero_shot_serving" => zero_shot_serving} = state) do
     state = if (direction == "INBOUND" and is_map_key(state, params["conversation_id"])) or (direction == "INBOUND" and check_for_injury(zero_shot_serving, body)) do
       ai_prompt_messages = get_conversation(params, state)
-
       response_body = generate_response_body(ai_prompt_messages)
 
-      message_params = %{
-        from: to,
-        body: response_body,
-        to: from
-      }
+      message_params = %{from: to, body: response_body, to: from}
 
       headers = [{"X-WHIPPY-KEY", System.get_env("WHIPPY_API_KEY")}, {"Content-Type", "application/json"}]
       HTTPoison.post("localhost:4000/v1/messaging/sms", Jason.encode!(message_params), headers, [recv_timeout: 15_000])
@@ -128,7 +104,6 @@ defmodule WhippyChat.Bot do
     {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "facebook/bart-large-mnli"})
 
     labels = ["injury", "non-injury"]
-
     zero_shot_serving = Bumblebee.Text.zero_shot_classification(model, tokenizer, labels)
 
     IO.puts "Loaded models"
@@ -160,12 +135,7 @@ defmodule WhippyChat.Bot do
     state[conversation_id] ++ [%{role: "user", content: body}]
   end
 
-  defp get_conversation(%{"body" => body}, _state) do
-    [
-      %{role: "system", content: @prompt},
-      %{role: "user", content: body}
-    ]
-  end
+  defp get_conversation(%{"body" => body}, _state), do: [%{role: "system", content: @prompt}, %{role: "user", content: body}]
 
   defp check_for_injury(zero_shot_serving, body) do
     %{predictions: [%{label: "injury", score: injury_score}, %{label: "non-injury", score: non_injury_score}]} = Nx.Serving.run(zero_shot_serving, body)
@@ -173,3 +143,10 @@ defmodule WhippyChat.Bot do
     injury_score > non_injury_score and injury_score > 0.7
   end
 end
+
+System.no_halt(true)
+
+Application.put_env(:nx, :default_backend, EXLA.Backend)
+
+{:ok, _pid} = WhippyChat.Bot.start_link(%{})
+Bandit.start_link(plug: WhippyChat.Plug, port: 4010)
