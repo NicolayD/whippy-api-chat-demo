@@ -94,10 +94,12 @@ defmodule WhippyChat.Bot do
 
   @impl true
   def handle_cast({:classify, %{"body" => body, "direction" => direction, "from" => from, "to" => to} = params}, %{"zero_shot_serving" => zero_shot_serving} = state) do
-    state = if (direction == "INBOUND" and is_map_key(state, params["conversation_id"])) or (direction == "INBOUND" and check_for_injury(zero_shot_serving, body)) do
+    IO.inspect params
+
+    state = if (direction == "INBOUND" and is_map_key(state, params["conversation_id"])) or (direction == "INBOUND" and check_for_injury(zero_shot_serving, body)) and ((is_map_key(state, params["conversation_id"]) and length(state["conversation_id"]) < 7) or not is_map_key(state, params["conversation_id"])) do
       ai_prompt_messages = get_conversation(params, state)
 
-      response_body = generate_response_body(ai_prompt_messages)
+      response_body = generate_response_body(ai_prompt_messages) |> IO.inspect(label: "openai response")
 
       message_params = %{
         from: to,
@@ -112,8 +114,9 @@ defmodule WhippyChat.Bot do
 
       Map.merge(state, %{params["conversation_id"] => updated_conversation})
     else
-      %{}
+      state
     end
+    |> IO.inspect(label: "state")
 
     {:noreply, state}
   end
@@ -168,8 +171,11 @@ defmodule WhippyChat.Bot do
   end
 
   defp check_for_injury(zero_shot_serving, body) do
-    %{predictions: [%{label: "injury", score: injury_score}, %{label: "non-injury", score: non_injury_score}]} = Nx.Serving.run(zero_shot_serving, body)
-
-    injury_score > non_injury_score and injury_score > 0.7
+    case Nx.Serving.run(zero_shot_serving, body) do
+      %{predictions: [%{label: "injury", score: injury_score}, %{label: "non-injury", score: non_injury_score}]} ->
+        injury_score > non_injury_score and injury_score > 0.7
+      %{predictions: [%{label: "non-injury", score: non_injury_score}, %{label: "injury", score: injury_score}]} ->
+        injury_score > non_injury_score and injury_score > 0.7
+    end
   end
 end
